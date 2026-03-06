@@ -1,10 +1,11 @@
 const { TICK_RATE, BROADCAST_RATE, GAME_DURATION } = require('./constants');
 
 class GameLoop {
-  constructor(gameState, broadcastFn, gameOverFn) {
+  constructor(gameState, broadcastFn, gameOverFn, tickFn = null) {
     this.gameState = gameState;
     this.broadcastFn = broadcastFn;
     this.gameOverFn = gameOverFn;
+    this.tickFn = tickFn;
     this.running = false;
     this.tickInterval = null;
     this.broadcastInterval = null;
@@ -19,6 +20,9 @@ class GameLoop {
     this.tickInterval = setInterval(() => {
       if (!this.running) return;
       const now = Date.now();
+      if (this.tickFn) {
+        this.tickFn(this.tickDt, now);
+      }
       this.gameState.update(this.tickDt, now);
 
       // Check game over

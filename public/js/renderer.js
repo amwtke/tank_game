@@ -3,18 +3,39 @@ class Renderer {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.particles = new ParticleSystem();
+    this.mapCacheCanvas = document.createElement('canvas');
+    this.mapCacheCtx = this.mapCacheCanvas.getContext('2d');
+    this.mapCacheDirty = true;
+    this.cachedTiles = null;
+    this.needsResize = true;
+
+    window.addEventListener('resize', () => {
+      this.needsResize = true;
+    });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => {
+        this.needsResize = true;
+      });
+    }
   }
 
   resize() {
-    // Use the actual displayed size of the canvas element, not window size
+    if (!this.needsResize && this.canvas.width > 0 && this.canvas.height > 0) {
+      return false;
+    }
+
     const rect = this.canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const w = Math.round(rect.width * dpr);
     const h = Math.round(rect.height * dpr);
+    let changed = false;
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
+      changed = true;
     }
+    this.needsResize = false;
+    return changed;
   }
 
   clear() {
@@ -22,58 +43,78 @@ class Renderer {
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
-  drawMap(tiles, cameraX, cameraY) {
-    const ts = C.TILE_SIZE;
-    const startCol = Math.max(0, Math.floor(cameraX / ts));
-    const endCol = Math.min(C.MAP_COLS - 1, Math.ceil((cameraX + this.canvas.width) / ts));
-    const startRow = Math.max(0, Math.floor(cameraY / ts));
-    const endRow = Math.min(C.MAP_ROWS - 1, Math.ceil((cameraY + this.canvas.height) / ts));
+  invalidateMap() {
+    this.mapCacheDirty = true;
+  }
 
-    for (let r = startRow; r <= endRow; r++) {
-      for (let c = startCol; c <= endCol; c++) {
-        const x = c * ts - cameraX;
-        const y = r * ts - cameraY;
-        const tile = tiles[r][c];
+  _drawTile(ctx, tile, x, y, ts) {
+    if (tile === C.TILE_EMPTY) {
+      ctx.fillStyle = '#2a2a4a';
+      ctx.fillRect(x, y, ts, ts);
+      ctx.strokeStyle = '#333355';
+      ctx.lineWidth = 0.5;
+      ctx.strokeRect(x, y, ts, ts);
+      return;
+    }
 
-        if (tile === C.TILE_EMPTY) {
-          // Ground
-          this.ctx.fillStyle = '#2a2a4a';
-          this.ctx.fillRect(x, y, ts, ts);
-          // Grid lines
-          this.ctx.strokeStyle = '#333355';
-          this.ctx.lineWidth = 0.5;
-          this.ctx.strokeRect(x, y, ts, ts);
-        } else if (tile === C.TILE_WALL) {
-          // Indestructible wall
-          this.ctx.fillStyle = '#555577';
-          this.ctx.fillRect(x, y, ts, ts);
-          // Bevel effect
-          this.ctx.fillStyle = '#666688';
-          this.ctx.fillRect(x + 2, y + 2, ts - 4, 4);
-          this.ctx.fillRect(x + 2, y + 2, 4, ts - 4);
-          this.ctx.fillStyle = '#444466';
-          this.ctx.fillRect(x + 2, y + ts - 6, ts - 4, 4);
-          this.ctx.fillRect(x + ts - 6, y + 2, 4, ts - 4);
-        } else if (tile === C.TILE_BRICK) {
-          // Destructible brick
-          this.ctx.fillStyle = '#8B6914';
-          this.ctx.fillRect(x, y, ts, ts);
-          // Brick pattern
-          this.ctx.strokeStyle = '#705510';
-          this.ctx.lineWidth = 1;
-          const brickH = ts / 4;
-          for (let row = 0; row < 4; row++) {
-            const by = y + row * brickH;
-            this.ctx.strokeRect(x, by, ts, brickH);
-            const offset = row % 2 === 0 ? 0 : ts / 2;
-            this.ctx.beginPath();
-            this.ctx.moveTo(x + ts / 2 + offset, by);
-            this.ctx.lineTo(x + ts / 2 + offset, by + brickH);
-            this.ctx.stroke();
-          }
-        }
+    if (tile === C.TILE_WALL) {
+      ctx.fillStyle = '#555577';
+      ctx.fillRect(x, y, ts, ts);
+      ctx.fillStyle = '#666688';
+      ctx.fillRect(x + 2, y + 2, ts - 4, 4);
+      ctx.fillRect(x + 2, y + 2, 4, ts - 4);
+      ctx.fillStyle = '#444466';
+      ctx.fillRect(x + 2, y + ts - 6, ts - 4, 4);
+      ctx.fillRect(x + ts - 6, y + 2, 4, ts - 4);
+      return;
+    }
+
+    if (tile === C.TILE_BRICK) {
+      ctx.fillStyle = '#8B6914';
+      ctx.fillRect(x, y, ts, ts);
+      ctx.strokeStyle = '#705510';
+      ctx.lineWidth = 1;
+      const brickH = ts / 4;
+      for (let row = 0; row < 4; row++) {
+        const by = y + row * brickH;
+        ctx.strokeRect(x, by, ts, brickH);
+        const offset = row % 2 === 0 ? 0 : ts / 2;
+        ctx.beginPath();
+        ctx.moveTo(x + ts / 2 + offset, by);
+        ctx.lineTo(x + ts / 2 + offset, by + brickH);
+        ctx.stroke();
       }
     }
+  }
+
+  _ensureMapCache(tiles) {
+    const mapW = C.MAP_COLS * C.TILE_SIZE;
+    const mapH = C.MAP_ROWS * C.TILE_SIZE;
+    if (this.mapCacheCanvas.width !== mapW || this.mapCacheCanvas.height !== mapH) {
+      this.mapCacheCanvas.width = mapW;
+      this.mapCacheCanvas.height = mapH;
+      this.mapCacheDirty = true;
+    }
+
+    if (!this.mapCacheDirty && this.cachedTiles === tiles) {
+      return;
+    }
+
+    const ctx = this.mapCacheCtx;
+    ctx.clearRect(0, 0, mapW, mapH);
+    for (let row = 0; row < C.MAP_ROWS; row++) {
+      for (let col = 0; col < C.MAP_COLS; col++) {
+        this._drawTile(ctx, tiles[row][col], col * C.TILE_SIZE, row * C.TILE_SIZE, C.TILE_SIZE);
+      }
+    }
+
+    this.cachedTiles = tiles;
+    this.mapCacheDirty = false;
+  }
+
+  drawMap(tiles, cameraX, cameraY) {
+    this._ensureMapCache(tiles);
+    this.ctx.drawImage(this.mapCacheCanvas, -cameraX, -cameraY);
   }
 
   drawTank(tank, cameraX, cameraY, isLocal, name) {
@@ -197,7 +238,7 @@ class Renderer {
     this.ctx.fill();
   }
 
-  drawHUD(state, remaining, playerId, players) {
+  drawHUD(state, remaining, playerId, players, facts) {
     const ctx = this.ctx;
     const w = this.canvas.width;
 
@@ -237,6 +278,40 @@ class Renderer {
     ctx.fillStyle = '#fff';
     ctx.fillText(`RED: ${alive[1]}`, w / 2 + 90, 23);
 
+    ctx.restore();
+    this.drawFactsPanel(facts);
+  }
+
+  drawFactsPanel(facts) {
+    if (!facts) return;
+
+    const ctx = this.ctx;
+    const panelX = 10;
+    const panelY = 10;
+    const panelW = 160;
+    const panelH = 112;
+    const lines = [
+      'FACTS',
+      `FPS ${facts.fps}`,
+      `STATE ${facts.stateUpdatesPerSec}/s`,
+      `INPUT ${facts.inputsPerSec}/s`,
+      `AGE ${facts.snapshotAgeMs}ms`,
+      `TANKS ${facts.tanks}`,
+      `BULLETS ${facts.bullets}`,
+    ];
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.58)';
+    ctx.fillRect(panelX, panelY, panelW, panelH);
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.strokeRect(panelX, panelY, panelW, panelH);
+    ctx.fillStyle = '#cfe3ff';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], panelX + 10, panelY + 10 + i * 14);
+    }
     ctx.restore();
   }
 

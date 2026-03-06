@@ -116,6 +116,12 @@ body {
   transform: scale(0.95);
 }
 
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+}
+
 .btn-mode {
   background: linear-gradient(135deg, #4A90D9, #3570B0);
   color: #fff;
@@ -256,9 +262,27 @@ body {
   border-left: 3px solid #4CAF50;
 }
 
+.owner-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255, 152, 0, 0.18);
+  color: #FFB74D;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
 .player-slot.empty {
   color: #555;
   font-style: italic;
+}
+
+.lobby-meta {
+  margin-bottom: 16px;
+  color: #8a8fb3;
+  font-size: 14px;
 }
 
 .lobby-actions {

@@ -3,8 +3,9 @@ class UI {
     this.network = network;
     this.currentScreen = 'menu'; // menu | lobby | game | gameover
     this.roomData = null;
-    this.playerName = '';
+    this.playerName = this._loadPlayerName();
     this.gameOverData = null;
+    this._isReady = false;
 
     this.overlay = document.getElementById('overlay');
     this.gameCanvas = document.getElementById('gameCanvas');
@@ -32,7 +33,8 @@ class UI {
         <h1 class="game-title">TANK BATTLE</h1>
         <div class="name-input-group">
           <input type="text" id="playerName" placeholder="Your name" maxlength="12"
-                 value="${this._esc(this.playerName)}" class="text-input" />
+                 value="${this._esc(this.playerName)}" class="text-input"
+                 oninput="ui.setPlayerName(this.value)" />
         </div>
         <div class="create-room-section">
           <h3>Create Room</h3>
@@ -56,6 +58,9 @@ class UI {
     this.currentScreen = 'lobby';
     this.roomData = room;
     this.gameCanvas.style.display = 'none';
+    const me = room.players.find(p => p.id === this.network.id) || null;
+    const isOwner = !!me && room.ownerId === me.id;
+    this._isReady = !!me && me.ready;
 
     const team0 = room.players.filter(p => p.team === 0);
     const team1 = room.players.filter(p => p.team === 1);
@@ -65,7 +70,9 @@ class UI {
         <h3>${teamName}</h3>`;
       for (const p of players) {
         const readyClass = p.ready ? 'ready' : '';
-        html += `<div class="player-slot ${readyClass}">${this._esc(p.name)} ${p.ready ? '✓' : ''}</div>`;
+        const ownerBadge = p.id === room.ownerId ? '<span class="owner-badge">HOST</span>' : '';
+        const readyMark = p.ready ? '✓' : '';
+        html += `<div class="player-slot ${readyClass}">${this._esc(p.name)} ${ownerBadge} ${readyMark}</div>`;
       }
       // Empty slots
       const parts = room.mode.split('v');
@@ -85,9 +92,10 @@ class UI {
           <div class="vs-divider">VS</div>
           ${renderTeam(1, team1, 'Red Team')}
         </div>
+        <div class="lobby-meta">${isOwner ? 'You are the room creator and can start the match.' : 'Only the room creator can start the match.'}</div>
         <div class="lobby-actions">
-          <button class="btn btn-ready" onclick="ui.toggleReady()">Ready</button>
-          <button class="btn btn-start" onclick="ui.startGame()">Start Game</button>
+          <button class="btn btn-ready" onclick="ui.toggleReady()">${this._isReady ? 'Cancel Ready' : 'Ready'}</button>
+          <button class="btn btn-start" onclick="ui.startGame()" ${isOwner ? '' : 'disabled'}>${isOwner ? 'Start Game' : 'Host Only'}</button>
           <button class="btn btn-leave" onclick="ui.leaveRoom()">Leave</button>
         </div>
       </div>`;
@@ -125,14 +133,15 @@ class UI {
 
   // Actions
   createRoom(mode) {
-    this.playerName = document.getElementById('playerName')?.value || 'Player';
-    const roomName = document.getElementById('roomName')?.value || `${this.playerName}'s room`;
-    this.network.emit('create_room', { name: roomName, mode, playerName: this.playerName });
+    const playerName = this._resolvePlayerName();
+    const roomNameInput = document.getElementById('roomName')?.value || '';
+    const roomName = roomNameInput.trim() || `${playerName}'s room`;
+    this.network.emit('create_room', { name: roomName, mode, playerName });
   }
 
   joinRoom(roomId) {
-    this.playerName = document.getElementById('playerName')?.value || 'Player';
-    this.network.emit('join_room', { roomId, playerName: this.playerName });
+    const playerName = this._resolvePlayerName();
+    this.network.emit('join_room', { roomId, playerName });
   }
 
   refreshRooms() {
@@ -149,15 +158,47 @@ class UI {
   }
 
   leaveRoom() {
+    this._isReady = false;
     this.network.emit('leave_room');
     this.network.emit('get_rooms');
   }
 
   returnToMenu() {
     this.currentScreen = 'menu';
+    this._isReady = false;
     this.gameCanvas.style.display = 'none';
     this.network.emit('return_to_lobby');
     this.network.emit('get_rooms');
+  }
+
+  setPlayerName(value) {
+    this.playerName = this._normalizeName(value, false);
+    try {
+      localStorage.setItem('tankBattlePlayerName', this.playerName);
+    } catch (err) {
+      // Ignore storage failures and keep the in-memory name.
+    }
+  }
+
+  _resolvePlayerName() {
+    const raw = document.getElementById('playerName')?.value ?? this.playerName;
+    const playerName = this._normalizeName(raw, true);
+    this.setPlayerName(playerName);
+    return playerName;
+  }
+
+  _normalizeName(value, fallbackToDefault) {
+    const name = String(value || '').trim().slice(0, 12);
+    if (name) return name;
+    return fallbackToDefault ? 'Player' : '';
+  }
+
+  _loadPlayerName() {
+    try {
+      return this._normalizeName(localStorage.getItem('tankBattlePlayerName') || '', false);
+    } catch (err) {
+      return '';
+    }
   }
 
   _esc(str) {

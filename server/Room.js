@@ -5,6 +5,12 @@ const AIBot = require('./AIBot');
 const { COUNTDOWN_SECONDS, MAX_PLAYERS } = require('./constants');
 
 let nextRoomId = 1;
+const DEFAULT_PLAYER_NAME = 'Player';
+
+function normalizePlayerName(name) {
+  const value = String(name || '').trim().slice(0, 12);
+  return value || DEFAULT_PLAYER_NAME;
+}
 
 class Room {
   constructor(name, mode, io) {
@@ -18,6 +24,7 @@ class Room {
     this.gameState = null;
     this.gameLoop = null;
     this.countdownTimer = null;
+    this.ownerId = null;
 
     const parts = mode.split('v');
     this.teamSize = parseInt(parts[0]);
@@ -39,7 +46,16 @@ class Room {
     const team = team0 <= team1 ? 0 : 1;
     const slot = team === 0 ? team0 : team1;
 
-    this.players.set(socket.id, { socket, name, team, slot, ready: false });
+    this.players.set(socket.id, {
+      socket,
+      name: normalizePlayerName(name),
+      team,
+      slot,
+      ready: false,
+    });
+    if (!this.ownerId) {
+      this.ownerId = socket.id;
+    }
     socket.join(this.id);
     this._broadcastRoomState();
     return true;
@@ -49,10 +65,13 @@ class Room {
     const player = this.players.get(socketId);
     if (!player) return;
     this.players.delete(socketId);
+    if (this.ownerId === socketId) {
+      this.ownerId = this.players.keys().next().value || null;
+    }
 
-    if (this.state === 'lobby') {
+    if (this.state === 'lobby' || this.state === 'countdown') {
       if (this.countdownTimer) {
-        clearTimeout(this.countdownTimer);
+        clearInterval(this.countdownTimer);
         this.countdownTimer = null;
         this.state = 'lobby';
       }
@@ -70,8 +89,17 @@ class Room {
     this._broadcastRoomState();
   }
 
-  startGame() {
-    if (this.state !== 'lobby') return;
+  isOwner(socketId) {
+    return this.ownerId === socketId;
+  }
+
+  startGame(socketId) {
+    if (this.state !== 'lobby') {
+      return { ok: false, error: 'Game already started' };
+    }
+    if (!this.isOwner(socketId)) {
+      return { ok: false, error: 'Only the room creator can start the game' };
+    }
 
     // Fill empty slots with bots
     this._fillBots();
@@ -92,6 +120,7 @@ class Room {
         this.io.to(this.id).emit('countdown', count);
       }
     }, 1000);
+    return { ok: true };
   }
 
   _fillBots() {
@@ -155,14 +184,15 @@ class Room {
       this.gameState,
       (state, events, remaining) => {
         this.io.to(this.id).emit('state_update', { state, events, remaining });
-        // Update bots
-        for (const bc of botControllers) {
-          bc.update();
-        }
       },
       (winner) => {
         this.state = 'ended';
         this.io.to(this.id).emit('game_over', { winner });
+      },
+      () => {
+        for (const bc of botControllers) {
+          bc.update();
+        }
       }
     );
     this.gameLoop.start();
@@ -181,13 +211,20 @@ class Room {
   serialize() {
     const players = [];
     for (const [sid, p] of this.players) {
-      players.push({ id: sid, name: p.name, team: p.team, ready: p.ready });
+      players.push({
+        id: sid,
+        name: p.name,
+        team: p.team,
+        ready: p.ready,
+        isOwner: sid === this.ownerId,
+      });
     }
     return {
       id: this.id,
       name: this.name,
       mode: this.mode,
       state: this.state,
+      ownerId: this.ownerId,
       playerCount: this.players.size,
       maxPlayers: this.maxPlayers,
       players,

@@ -43,7 +43,11 @@ class GameServer {
 
       socket.on('start_game', () => {
         const room = this.rooms.get(socket.currentRoom);
-        if (room) room.startGame();
+        if (!room) return;
+        const result = room.startGame(socket.id);
+        if (!result.ok) {
+          socket.emit('error_msg', result.error);
+        }
       });
 
       socket.on('player_input', (input) => {
